@@ -1,11 +1,3 @@
-
-
-# =========================
-# INSTALL (run once)
-# =========================
-install.packages(c("shiny","shinydashboard","plotly","leaflet",
-                   "ggplot2","dplyr","DT","terra","lidR","sf"))
-
 # =========================
 # LIBRARIES
 # =========================
@@ -19,6 +11,7 @@ library(DT)
 library(terra)
 library(lidR)
 library(sf)
+library(RCSF)
 
 # =========================
 # HELPER FUNCTION
@@ -61,6 +54,23 @@ ui <- dashboardPage(
     
     fluidRow(
       box(width = 12, DTOutput("table"))
+    ),
+    
+    # ✅ 3D VIDEO - Updated Link
+    fluidRow(
+      box(
+        width = 12,
+        title = "3D LiDAR Video",
+        status = "success",
+        solidHeader = TRUE,
+        tags$iframe(
+          src = "https://drive.google.com/file/d/14n9kHZyQnLvRv5JK-XkrV4owBSZZPxbO/preview",
+          width = "100%",
+          height = "500px",
+          style = "border:none;",
+          allowfullscreen = "true"
+        )
+      )
     )
   )
 )
@@ -70,12 +80,16 @@ ui <- dashboardPage(
 # =========================
 server <- function(input, output) {
   
-  # 🔥 PROCESS YOUR LiDAR (AUTO)
   data <- reactive({
     
-    las <- readLAS("D:/Kodaikanal/2026-04-11_11-46-34_9pct_time.laz")
+    # ✅ Fixed path + filter
+    las <- readLAS("Data/2026-04-11_11-46-34_9pct_time.laz",
+                   filter = "-drop_return_number 0")
     
     validate(need(!is.empty(las), "LAS file empty"))
+    
+    # ✅ Fix CRS for GeoSLAM scanner
+    projection(las) <- sp::CRS("+proj=tmerc +datum=WGS84")
     
     # Ground + normalize
     las <- classify_ground(las, csf())
@@ -99,11 +113,9 @@ server <- function(input, output) {
     list(las = las, trees = trees, chm = chm)
   })
   
-  # 🔹 SAMPLE POINT CLOUD
   lidar_sample <- reactive({
     df <- as.data.frame(data()$las@data)
     df <- df %>% filter(Z >= input$z_filter)
-    
     n <- min(input$sample_n, nrow(df))
     df[sample(nrow(df), n), ]
   })
@@ -112,15 +124,15 @@ server <- function(input, output) {
   # VALUE BOXES
   # =====================
   output$trees <- renderValueBox({
-    valueBox(nrow(data()$trees), "Trees", color = "green")
+    valueBox(nrow(data()$trees), "Trees Detected", color = "green")
   })
   
   output$mean_h <- renderValueBox({
-    valueBox(round(mean(data()$trees$Z),2), "Mean Height", color = "blue")
+    valueBox(round(mean(data()$trees$Z), 2), "Mean Height (m)", color = "blue")
   })
   
   output$max_h <- renderValueBox({
-    valueBox(round(max(data()$trees$Z),2), "Max Height", color = "purple")
+    valueBox(round(max(data()$trees$Z), 2), "Max Height (m)", color = "purple")
   })
   
   # =====================
@@ -128,40 +140,41 @@ server <- function(input, output) {
   # =====================
   output$hist <- renderPlot({
     ggplot(data()$trees, aes(Z)) +
-      geom_histogram(fill="forestgreen", bins=25)
+      geom_histogram(fill = "forestgreen", bins = 25) +
+      labs(title = "Tree Height Distribution",
+           x = "Height (m)", y = "Count")
   })
   
   output$gbh_plot <- renderPlot({
     ggplot(data()$trees, aes(Z, GBH)) +
-      geom_point(color="brown") +
-      geom_smooth(method="lm")
+      geom_point(color = "brown") +
+      geom_smooth(method = "lm") +
+      labs(title = "Height vs GBH",
+           x = "Height (m)", y = "GBH (cm)")
   })
   
   # =====================
   # 3D PLOT
   # =====================
   output$plot3d <- renderPlotly({
-    
     pts <- lidar_sample()
     
     p <- plot_ly(
       pts, x=~X, y=~Y, z=~Z,
-      type="scatter3d",
-      mode="markers",
-      marker=list(size=1, color=~Z, colorscale="Viridis")
+      type = "scatter3d",
+      mode = "markers",
+      marker = list(size=1, color=~Z, colorscale="Viridis")
     )
     
-    if(input$show_trees){
+    if(input$show_trees) {
       p <- add_trace(p,
                      data = data()$trees,
                      x=~X, y=~Y, z=~Z,
-                     type="scatter3d",
-                     mode="markers",
-                     marker=list(size=4, color="red"),
-                     name="Trees"
-      )
+                     type = "scatter3d",
+                     mode = "markers",
+                     marker = list(size=4, color="red"),
+                     name = "Trees")
     }
-    
     p
   })
   
@@ -169,21 +182,20 @@ server <- function(input, output) {
   # CHM MAP
   # =====================
   output$chm_map <- renderLeaflet({
-    
     chm <- data()$chm
-    pal <- colorNumeric("YlGn", values(chm), na.color="transparent")
+    pal <- colorNumeric("YlGn", values(chm), na.color = "transparent")
     
     leaflet() %>%
       addProviderTiles(providers$Esri.WorldImagery) %>%
       addRasterImage(chm, colors = pal, opacity = 0.8) %>%
-      addLegend(pal = pal, values = values(chm), title = "Height")
+      addLegend(pal = pal, values = values(chm), title = "Height (m)")
   })
   
   # =====================
   # TABLE
   # =====================
   output$table <- renderDT({
-    datatable(data()$trees)
+    datatable(data()$trees, options = list(pageLength = 10))
   })
 }
 
@@ -191,4 +203,3 @@ server <- function(input, output) {
 # RUN APP
 # =========================
 shinyApp(ui, server)
-
